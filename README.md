@@ -50,4 +50,15 @@ repeated for each measurement. Another supported file format is the following, c
 
 Actually, any input file is converted into this last *wide-shaped* format before further processing.
 
+**IMPORTANT**: in this version, optical density and fluorescent data should be uploaded as different files. See `raw_data/dummy/od_dummy` and `raw_data/dummy/flu_dummy` for an example.
+
 ### About data extraction
+
+The app generates 4 matrixes that capture the information of the 96 well plate. 
+
+* `od_matrix` contains the optical density information. It´s in the *wide-shape* format
+* `flu_matrix` contains the fluorescence information; also in *wide-shape* format
+* `design_matrix` contains information about the experimental design. Basically, to which condition (e.g concentration of inducer) each well is associated
+* `blank_matrix` contains the well coordinates of the blank(s), and to which data wells are they associated
+
+Examples of each matrix are available at `data_raw/dummy/od_matrix`, `data_raw/dummy/flu_matrix`, `data_raw/dummy/design_matrix` and `data_raw/dummy/blank_matrix`. Ultimately, these matrixes are parsed as arguments into the `raw2tidy` function.
