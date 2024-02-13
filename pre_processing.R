@@ -134,23 +134,28 @@ block_shape_processing <- function(name) {
   # Set column names to well_columns
   colnames(raw_data) <- well_columns
   
+  # Index where the data starts
+  idx <- grep("<>", tab[[1]])[1]
+  
   # Dropping the first column
   tab <- select(tab, -...1)
-  
+
   # Iterating over every "snapshot"
-  snapshot <- 12 - 1 # weird R indexing 
+  snapshot <- 8 + idx   
   num_rows <- nrow(tab) 
   num_iterations <- num_rows %/% snapshot
   
   for (i in seq(1, num_iterations, by = 1)) {
     
-    start_row <- (i - 1) * snapshot + 1
+    if (i == 1) {start_row <- 1}
+    else {start_row <- (i - 1)*snapshot + 1}
+    
     end_row <- min(i * snapshot, num_rows)
     
     chunk <- tab[start_row:end_row, ]
     
-    # Drop the first three rows
-    chunk <- chunk[-c(1, 2, 3), ]
+    # Drop the first "idx" columns
+    chunk <- chunk[-(1:idx), ]
     
     # Replace the ith row of raw_data with reshaped vector
     raw_data[i, ] <- as.vector(t(as.matrix(chunk)))
@@ -161,6 +166,27 @@ block_shape_processing <- function(name) {
   raw_data <- raw_data[, c(ncol(raw_data), 1:(ncol(raw_data)-1))]
   
   return(raw_data)
+  
+}
+
+tidy_shape_processing <- function(name) {
+  
+  # ######################################################################## 
+  # Description: tidy-shape to wide-shape format  
+  #                                                                         
+  # Inputs:                                                                  
+  #         name:         name of the Excel file's path <type:string>         
+  #                                                                          
+  # Output:                                                                  
+  #         raw_data:     output tidy dataframe <type:tibble>                                  
+  # ########################################################################
+  
+  # To-Do
+  # General idea:
+  # Recreate raw_data from previous function
+  # Find the unique(name$wells) values
+  # Iterate through them, look into the raw_data columns and do
+  # raw_data[column] <- name %>% filter(Condition == iteration)[data]
   
 }
 
@@ -224,7 +250,6 @@ raw2tidy <- function(od_matrix, flu_matrix, design_matrix, blank_matrix) {
     } 
     
     else {
-      print('wtf')
       # Broadcasting and appending without averaging
       broadcasted_assigned_blank <- od_matrix[, assigned_blank, drop = FALSE]
       subtracted_columns <- od_matrix[, corresponding_wells, drop = FALSE] - broadcasted_assigned_blank
