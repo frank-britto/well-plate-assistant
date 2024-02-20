@@ -3,20 +3,14 @@ library(shiny)
 library(shinyjs)
 library(readxl)
 library(dplyr)
+library(ggplot2)
+library(tidyr)
 
 # Import functions
 source('pre_processing.R')
+source('UX_UI.R')
 
-# Function to generate well names based on grid dimensions
-generate_well_names <- function(rows, cols) {
-  well_names <- c()
-  for (row in LETTERS[1:rows]) {
-    for (col in 1:cols) {
-      well_names <- c(well_names, paste0(row, col))
-    }
-  }
-  return(well_names)
-}
+# ################## Design features ##############################
 
 # Set the dimensions of the plot grid
 grid_rows <- 8
@@ -25,7 +19,7 @@ grid_cols <- 12
 # Generate well names based on the grid dimensions
 well_names <- generate_well_names(grid_rows, grid_cols)
 
-# Create an empty dataframe with two columns: "Well" and "Condition"
+# Create a reactive variable for the design matrix
 design_matrix <- reactiveValues(
   data = data.frame(
     Well = well_names,
@@ -34,28 +28,27 @@ design_matrix <- reactiveValues(
   )
 )
 
-# Add well names to the "Well" column in the design_matrix
+# Define well names in the design matrix
 design_matrix$Well <- well_names
 
-# Define a reactiveVal to store OD data
+# Create reactive variables for the od and fluorescence data
 od_matrix <- reactiveVal(NULL)
-
-# Define a reactiveVal to store Fluorescence data
 flu_matrix <- reactiveVal(NULL)
 
-# Create a reactiveVal to store the blank_matrix dataframe
+# Create a reactive variable for the blank matrix
 blank_matrix <- reactiveVal(NULL)
 
-# Define a reactiveVal to store clicked points and colors
+# Create a reactive variable to store the clicked wells and corresponding colors
 rv <- reactiveValues(
   clicked_points = data.frame(x = numeric(0), y = character(0), y_inv = character(0), id = character(0)),
   colors = rep("black", length(well_names)),
   showLegend = FALSE
 )
 
-# Define the UI for the Shiny app
+# ################## Interface layout ##############################
+
 ui <- fluidPage(
-  titlePanel("Formatting raw plate reader data"),
+  titlePanel("Multiwell plate assistant"),
   shinyjs::useShinyjs(),  # Enable the use of shinyjs
   sidebarLayout(
     sidebarPanel(
@@ -63,53 +56,78 @@ ui <- fluidPage(
       selectInput("dataFormat", "Data format", c("Block-shape", "Wide-shape", "Tidy-shape")),
       fileInput("odFile", "OD", accept = c(".csv", ".txt", ".xlsx", ".xls")),
       fileInput("fluorescenceFile", "Fluorescence", accept = c(".csv", ".txt", ".xlsx", ".xls")),
-      textInput("experimentalCondition", "Experimental Condition", value = "0"),
-      actionButton("restart", "Restart"),
-      actionButton("saveDesign", "Save design"),
-      br(),  # Added blank space
-      br(),  # Added blank space
-      br(),  # Added blank space
-      textInput("fileName", "File Name", value = "biosensor")  # Added text input for file name
+      conditionalPanel(
+        condition = "input.tabset == 'Data'",
+        uiOutput("columnSelector")
+      ),
+      conditionalPanel(
+        condition = "input.tabset == 'Design'",
+        textInput("experimentalCondition", "Experimental Condition", value = "0"),
+        actionButton("restart", "Restart"),
+        actionButton("saveDesign", "Save design"),
+        br(),  
+        br(),  
+        br()
+      ),
+      conditionalPanel(
+        condition = "input.tabset == 'Blank'",
+        textInput("fileName", "File Name", value = "biosensor"),
+      )
     ),
     mainPanel(
       tabsetPanel(
+        id = "tabset",
         tabPanel("Design", 
-                 h3("Design Matrix"),  # Title added here
-                 plotOutput("pointPlot", click = "plot_click"),  # Updated variable name
+                 h3("Design Matrix"),  
+                 plotOutput("pointPlot", click = "plot_click"),  
                  conditionalPanel(
                    condition = "input.showLegend",
                    uiOutput("legendToggle")
                  )
         ),
-        tabPanel("Data", 
+        tabPanel("Data",
                  h3("Raw plate reader data"),
-                 verbatimTextOutput("odData"),
-                 verbatimTextOutput("fluData")
-                 # Add content for the second tab as needed
-                 # ...
+                 fluidRow(
+                   column(6,
+                          br(),
+                          br(),
+                          verbatimTextOutput("odMessage"),
+                          plotOutput("odQualityPlot")
+                   ),
+                   column(6,
+                          br(),
+                          br(),
+                          verbatimTextOutput("fluorescenceMessage"),
+                          plotOutput("fluQualityPlot")
+                   )
+                 )
         ),
         tabPanel("Blank", 
                  h3("Blank matrix"),
                  fluidRow(
-                   column(6,  # Adjust column width as needed
+                   column(6,  
                           selectInput("assignBlanks", "Assigning blanks", choices = NULL)),
-                   column(6,  # Adjust column width as needed
-                          actionButton("exportBlanks", "Export")
+                   column(6,
+                          br(),
+                          actionButton("exportBlanks", "Export"),
+                          br(),
+                          br()
                    )
                  ),
                  plotOutput("blank_grid", click = "blank_grid_click"),
-                 verbatimTextOutput("blank_matrix_output")  # Display the blank_matrix dataframe
+                 verbatimTextOutput("blank_matrix_output"),  # Display the blank_matrix dataframe
+                 verbatimTextOutput("designMatrixNotAvailable")  # Display the "Design matrix not available" message
         )
+        
       )
     )
   )
 )
 
-# Define the server logic for the Shiny app
+
+# ################## Server functions ##############################
+
 server <- function(input, output, session) {
-  
-  # Create a reactive value to track whether "Save design" button is clicked
-  saveDesignClicked <- reactiveVal(FALSE)
   
   # Create a data frame with point coordinates
   points_data <- expand.grid(
@@ -139,6 +157,27 @@ server <- function(input, output, session) {
     # Add legend if showLegend is TRUE
     if (rv$showLegend) {
       legend("top", legend = unique_ids, fill = colors, title = "Experimental Conditions", horiz = TRUE)
+    }
+  })
+  
+  # Update clicked points and colors when a point is clicked
+  observeEvent(input$plot_click, {
+    click_x <- round(input$plot_click$x)
+    click_y <- LETTERS[round(input$plot_click$y)]
+    
+    existing_points <- rv$clicked_points[rv$clicked_points$x == click_x & rv$clicked_points$y == click_y, ]
+    
+    if (nrow(existing_points) > 0) {
+      rv$clicked_points <- rv$clicked_points[!(rv$clicked_points$x == click_x & rv$clicked_points$y == click_y), ]
+      rv$colors[paste(points_data$x, points_data$y, sep = "_") == paste(click_x, click_y, sep = "_")] <- "black"
+    } else {
+      condition <- input$experimentalCondition
+      id <- condition
+      inverted_complement_y <- LETTERS[8 - (match(click_y, LETTERS) - 1)]
+      new_point <- data.frame(x = click_x, y = click_y, y_inv = inverted_complement_y, id = id)
+      rv$clicked_points <- rbind(rv$clicked_points, new_point)
+      colors <- rainbow(nrow(rv$clicked_points))
+      rv$colors[paste(points_data$x, points_data$y, sep = "_") == paste(click_x, click_y, sep = "_")] <- colors[nrow(rv$clicked_points)]
     }
   })
   
@@ -172,44 +211,14 @@ server <- function(input, output, session) {
   # Render the blank_matrix dataframe in the "Blank" tab
   output$blank_matrix_output <- renderPrint({
     if (!is.null(blank_matrix())) {
-      return(blank_matrix())
+      print(blank_matrix())
     } else {
-      return("Blank matrix not available")
+      cat("Design matrix not available")
     }
   })
   
-  # Update clicked points and colors when a point is clicked
-  observeEvent(input$plot_click, {
-    click_x <- round(input$plot_click$x)
-    click_y <- LETTERS[round(input$plot_click$y)]
-    
-    existing_points <- rv$clicked_points[rv$clicked_points$x == click_x & rv$clicked_points$y == click_y, ]
-    
-    if (nrow(existing_points) > 0) {
-      rv$clicked_points <- rv$clicked_points[!(rv$clicked_points$x == click_x & rv$clicked_points$y == click_y), ]
-      rv$colors[paste(points_data$x, points_data$y, sep = "_") == paste(click_x, click_y, sep = "_")] <- "black"
-    } else {
-      condition <- input$experimentalCondition
-      id <- condition
-      inverted_complement_y <- LETTERS[8 - (match(click_y, LETTERS) - 1)]
-      new_point <- data.frame(x = click_x, y = click_y, y_inv = inverted_complement_y, id = id)
-      rv$clicked_points <- rbind(rv$clicked_points, new_point)
-      colors <- rainbow(nrow(rv$clicked_points))
-      rv$colors[paste(points_data$x, points_data$y, sep = "_") == paste(click_x, click_y, sep = "_")] <- colors[nrow(rv$clicked_points)]
-    }
-  })
-  
-  # Restart button
-  observeEvent(input$restart, {
-    rv$clicked_points <- data.frame(x = numeric(0), y = character(0), y_inv = character(0), id = character(0))
-    rv$colors <- rep("black", length(well_names))
-    rv$showLegend <- FALSE
-  })
-  
-  # Dynamically render the legend toggle button
-  output$legendToggle <- renderUI({
-    actionButton("legendToggle", if (rv$showLegend) "Hide Legend" else "Show Legend")
-  })
+  # Create a reactive variable to track when "Save Design" is clicked
+  saveDesignClicked <- reactiveVal(FALSE)
   
   # Save design button
   observeEvent(input$saveDesign, {
@@ -238,34 +247,17 @@ server <- function(input, output, session) {
     blank_matrix(blank_matrix_data)
   })
   
-  # Define a function to handle y-coordinate inversion
-  invert_y_coordinate <- function(y, total_rows) {
-    return(toupper(letters[total_rows + 1 - y]))
-  }
+  # Dynamically render the legend toggle button
+  output$legendToggle <- renderUI({
+    actionButton("legendToggle", if (rv$showLegend) "Hide Legend" else "Show Legend")
+  })
   
-  # Observer for the "blank grid" click
-  observeEvent(input$blank_grid_click, {
-    click_x <- round(input$blank_grid_click$x)
-    click_y <- invert_y_coordinate(round(input$blank_grid_click$y), grid_rows)  # Adjust for the inverted y-axis
-    
-    # Find the clicked well in the blank_matrix_data
-    clicked_well <- paste(click_y, click_x, sep = "")
-    
-    blank_matrix_data <- blank_matrix()
-    
-    if (!is.null(blank_matrix_data) && nrow(blank_matrix_data) > 0) {
-      # Check if the current value of the "Selection box" is in the "Condition" column
-      condition_value <- input$assignBlanks
-      row_index <- which(blank_matrix_data$Condition == condition_value)
-      
-      if (length(row_index) > 0) {
-        # Update the corresponding "Well" value with the clicked coordinate
-        blank_matrix_data$Wells[row_index] <- clicked_well
-        
-        # Update the blank_matrix
-        blank_matrix(blank_matrix_data)
-      }
-    }
+  # Add the function of the "Restart" button
+  observeEvent(input$restart, {
+    rv$clicked_points <- data.frame(x = numeric(0), y = character(0), y_inv = character(0), id = character(0))
+    rv$colors <- rep("black", length(well_names))
+    rv$showLegend <- FALSE
+    blank_matrix(NULL)  # Reset blank_matrix to NULL
   })
   
   # Inside the observeEvent for "odFile" input
@@ -286,20 +278,63 @@ server <- function(input, output, session) {
     }
   })
   
-  # Update the UI to display the data frames or the message
-  output$odData <- renderPrint({
+  # Render message for missing OD files
+  output$columnSelector <- renderUI({
+    # Check if either od_matrix or flu_matrix is not NULL
     if (!is.null(od_matrix())) {
-      return(od_matrix())
+      # Get column names excluding NA values in the first row
+      col_options <- names(od_matrix())[!is.na(od_matrix()[1,])]
+      # Exclude column named "time" if it exists
+      col_options <- col_options[col_options != "time"]
+    } else if (!is.null(flu_matrix())) {
+      # Get column names excluding NA values in the first row
+      col_options <- names(flu_matrix())[!is.na(flu_matrix()[1,])]
+      # Exclude column named "time" if it exists
+      col_options <- col_options[col_options != "time"]
     } else {
-      return("File non existent")
+      # If neither od_matrix nor flu_matrix is available, return NULL
+      return(NULL)
+    }
+    
+    # Generate selectInput widget with dynamic options
+    selectInput("selectedColumn", "Select Column", choices = col_options)
+  })
+  
+  # Render plots for quality check of OD and fluorescence data
+  output$odQualityPlot <- renderPlot({
+    if (!is.null(od_matrix()) && !is.null(input$selectedColumn)) {
+      suppressMessages(quality_check(od_matrix(), input$selectedColumn, "od"))
     }
   })
   
-  output$fluData <- renderPrint({
-    if (!is.null(flu_matrix())) {
-      return(flu_matrix())
-    } else {
-      return("File non existent")
+  output$fluQualityPlot <- renderPlot({
+    if (!is.null(flu_matrix()) && !is.null(input$selectedColumn)) {
+      suppressMessages(quality_check(flu_matrix(), input$selectedColumn, "flu"))
+    }
+  })
+  
+  # Observer for the "blank grid" click
+  observeEvent(input$blank_grid_click, {
+    click_x <- round(input$blank_grid_click$x)
+    click_y <- invert_y_coordinate(round(input$blank_grid_click$y), grid_rows)  # Adjust for the inverted y-axis
+    
+    # Find the clicked well in the blank_matrix_data
+    clicked_well <- paste(click_y, click_x, sep = "")
+    
+    blank_matrix_data <- blank_matrix()
+    
+    if (!is.null(blank_matrix_data)) {
+      # Check if the current value of the "Selection box" is in the "Condition" column
+      condition_value <- input$assignBlanks
+      row_index <- which(blank_matrix_data$Condition == condition_value)
+      
+      if (length(row_index) > 0) {
+        # Update the corresponding "Well" value with the clicked coordinate
+        blank_matrix_data$Wells[row_index] <- clicked_well
+        
+        # Update the blank_matrix
+        blank_matrix(blank_matrix_data)
+      }
     }
   })
   
@@ -312,14 +347,29 @@ server <- function(input, output, session) {
   
   # Observer for "Export" button
   observeEvent(input$exportBlanks, {
-    # Call raw2tidy function with appropriate arguments
-    tidy_data <- raw2tidy(od_matrix(), flu_matrix(), as.data.frame(design_matrix$data), blank_matrix())
-    
-    # Get the current value from the "File Name" text input
-    file_name <- input$fileName
-    
-    # Save the tidy dataframe to a CSV file with the specified file name
-    write.csv(tidy_data, file = paste0(file_name, ".csv"), row.names = FALSE)
+    # Check if blank_matrix is not NULL
+    if (!is.null(blank_matrix())) {
+      # Call raw2tidy function with appropriate arguments
+      tidy_data <- raw2tidy(od_matrix(), flu_matrix(), as.data.frame(design_matrix$data), blank_matrix())
+      
+      # Get the current value from the "File Name" text input
+      file_name <- input$fileName
+      
+      # Check if the "tidy" folder exists
+      if (!dir.exists("tidy")) {
+        # If the "tidy" folder does not exist, create it
+        dir.create("tidy")
+      }
+      
+      # Save the tidy dataframe to the "tidy" folder
+      write.csv(tidy_data, file = file.path("tidy", paste0(file_name, ".csv")), row.names = FALSE)
+      
+      # Restart values to original
+      shinyjs::click("restart")
+      
+      # Restart the Shiny app
+      session$reload()
+    }
   })
   
 }
