@@ -52,8 +52,8 @@ ui <- fluidPage(
   shinyjs::useShinyjs(),  # Enable the use of shinyjs
   sidebarLayout(
     sidebarPanel(
-      selectInput("plateReader", "Plate reader", c("TECAN M200 Pro", "EnSight", "SpectraMax M2e", "TECAN MPlex")),
-      selectInput("dataFormat", "Data format", c("Block-shape", "Wide-shape", "Tidy-shape")),
+      selectInput("plateReader", "Plate reader", c("TECAN M200 Pro")),
+      selectInput("dataFormat", "Data format", c("Block-shape")),
       fileInput("odFile", "OD", accept = c(".csv", ".txt", ".xlsx", ".xls")),
       fileInput("fluorescenceFile", "Fluorescence", accept = c(".csv", ".txt", ".xlsx", ".xls")),
       conditionalPanel(
@@ -62,6 +62,7 @@ ui <- fluidPage(
       ),
       conditionalPanel(
         condition = "input.tabset == 'Design'",
+        numericInput("maturationTime", "Maturation time (minutes):", value = 0, min = 0, step = 1),
         textInput("experimentalCondition", "Experimental Condition", value = "0"),
         actionButton("restart", "Restart"),
         actionButton("saveDesign", "Save design"),
@@ -83,7 +84,8 @@ ui <- fluidPage(
                  conditionalPanel(
                    condition = "input.showLegend",
                    uiOutput("legendToggle")
-                 )
+                 ),
+                 verbatimTextOutput("fluorescenceShiftMessage")  # Add this line for the message
         ),
         tabPanel("Data",
                  h3("Raw plate reader data"),
@@ -115,11 +117,11 @@ ui <- fluidPage(
                  verbatimTextOutput("blank_matrix_output"),  # Display the blank_matrix dataframe
                  verbatimTextOutput("designMatrixNotAvailable")  # Display the "Design matrix not available" message
         )
-        
       )
     )
   )
 )
+
 
 
 # ################## Server functions ##############################
@@ -249,12 +251,90 @@ server <- function(input, output, session) {
     actionButton("legendToggle", if (rv$showLegend) "Hide Legend" else "Show Legend")
   })
   
+  # Reactive output to store and display the fluorescence shift message
+  output$fluorescenceShiftMessage <- renderText({
+    # Initialize with a default message
+    "Input the maturation time of the fluorescent protein and click on Save design for delay calculation"
+  })
+  
+  # Handle the "Save Design" button logic
+  observeEvent(input$saveDesign, {
+    # Check if both matrices are not NULL
+    if (!is.null(flu_matrix()) && !is.null(od_matrix())) {
+      
+      # Get the maturation time from input
+      maturation_time <- input$maturationTime
+      
+      # Calculate the sampling time as the average of adjacent differences of the "time" column
+      sampling_time_flu <- mean(diff(flu_matrix()$time), na.rm = TRUE)
+      sampling_time_od <- mean(diff(od_matrix()$time), na.rm = TRUE)
+      
+      # Use the average of the two sampling times for consistency
+      sampling_time <- mean(c(sampling_time_flu, sampling_time_od), na.rm = TRUE)
+      sampling_time <- sampling_time*60 
+      
+      # Calculate the N points for removal
+      N_points <- trunc(maturation_time / sampling_time)
+      
+      # Remove points from "flu_matrix"
+      if (N_points > 0) {
+        flu_data <- flu_matrix()  # Extract the full flu_matrix
+        flu_time <- flu_data$time  # Extract the time column
+        flu_data <- flu_data[,-which(names(flu_data) == "time")]  # Remove the time column temporarily
+        
+        # Remove the first N rows from the data matrix (for flu_matrix)
+        updated_flu_data <- flu_data[(N_points + 1):nrow(flu_data), ]
+        
+        # Remove the last N points from the time column (for flu_matrix)
+        updated_flu_time <- flu_time[1:(length(flu_time) - N_points)]  # Remove last N time points
+        
+        # Combine the updated data and time column again
+        flu_matrix(cbind(updated_flu_data, time = updated_flu_time))
+      }
+      
+      # Remove points from "od_matrix"
+      if (N_points > 0) {
+        od_data <- od_matrix()  # Extract the full od_matrix
+        od_time <- od_data$time  # Extract the time column
+        od_data <- od_data[,-which(names(od_data) == "time")]  # Remove the time column temporarily
+        
+        # Remove the last N rows from the data matrix (for od_matrix)
+        updated_od_data <- od_data[1:(nrow(od_data) - N_points), ]
+        
+        # Remove the last N points from the time column (for od_matrix)
+        updated_od_time <- od_time[1:(length(od_time) - N_points)]  # Remove last N time points
+        
+        # Combine the updated data and time column again
+        od_matrix(cbind(updated_od_data, time = updated_od_time))
+      }
+      
+      # After processing, update the fluorescence shift message
+      output$fluorescenceShiftMessage <- renderText({
+        paste("Fluorescence is shifted", N_points, "points due to account for", maturation_time, "minutes of maturation.")
+      })
+    }
+  })
+  
   # Add the function of the "Restart" button
   observeEvent(input$restart, {
     rv$clicked_points <- data.frame(x = numeric(0), y = character(0), y_inv = character(0), id = character(0))
     rv$colors <- rep("black", length(well_names))
     rv$showLegend <- FALSE
     blank_matrix(NULL)  # Reset blank_matrix to NULL
+    
+    # Recompute matrices without requiring re-upload of files
+    if (!is.null(input$odFile)) {
+      od_matrix(block_shape_processing(input$odFile$datapath))
+    }
+    
+    if (!is.null(input$fluorescenceFile)) {
+      flu_matrix(block_shape_processing(input$fluorescenceFile$datapath))
+    }
+    
+    # Reset the fluorescence shift message to the default
+    output$fluorescenceShiftMessage <- renderText({
+      "Input the maturation time of the fluorescent protein and click on Save design for delay calculation"
+    })
   })
   
   # Inside the observeEvent for "odFile" input
