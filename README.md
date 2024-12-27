@@ -1,22 +1,9 @@
 # well-plate-assistant
-Shiny app for automatic parsing and formatting of 96 well plate data
+Shiny app for automatic parsing and formatting of 96 well plate data from Infinite 200 Series microplate reader from TECAN.
 
 ## Running the app
 
-You can run the app remotely using the following [code](https://github.com/rstudio/shiny_example) in a simple R script. 
-
-```
-library(shiny)
-
-# Easiest way is to use runGitHub
-runGitHub("well-plate-assistant", "frank-britto")
-
-# Run a tar or zip file directly
-#runUrl("https://github.com/frank-britto/well-plate-assistant/archive/master.tar.gz")
-runUrl("https://github.com/frank-britto/well-plate-assistant/archive/master.zip")
-
-```
-Alternatively, clone the repository and execute `runApp()`. **For now, this is the best approach**.
+Deployed in shinyapps.io through the following link:  https://well-plate-assistant.shinyapps.io/well-plate-assistant/
 
 ## Features
 
@@ -58,5 +45,3 @@ The app generates 4 matrixes that capture the information of the 96 well plate.
 * `flu_matrix` contains the fluorescence information; also in *wide-shape* format
 * `design_matrix` contains information about the experimental design. Basically, to which condition (e.g concentration of inducer) each well is associated
 * `blank_matrix` contains the well coordinates of the blank(s), and to which data wells are they associated
-
-Examples of each matrix are available at `data_raw/dummy/od_matrix`, `data_raw/dummy/flu_matrix`, `data_raw/dummy/design_matrix` and `data_raw/dummy/blank_matrix`. Ultimately, these matrixes are parsed as arguments into the `raw2tidy` function.
