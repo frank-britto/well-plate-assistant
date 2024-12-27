@@ -72,7 +72,7 @@ ui <- fluidPage(
       ),
       conditionalPanel(
         condition = "input.tabset == 'Blank'",
-        textInput("fileName", "File Name", value = "biosensor"),
+        textInput("fileName", "File Name", value = "biosensor")
       )
     ),
     mainPanel(
@@ -107,10 +107,8 @@ ui <- fluidPage(
                    column(6,  
                           selectInput("assignBlanks", "Assigning blanks", choices = NULL)),
                    column(6,
-                          br(),
-                          actionButton("exportBlanks", "Export"),
-                          br(),
-                          br()
+                          # Place the Export button here
+                          downloadButton("downloadData", "Export", style = "margin-top: 25px;")  # Align the button vertically
                    )
                  ),
                  plotOutput("blank_grid", click = "blank_grid_click"),
@@ -121,9 +119,6 @@ ui <- fluidPage(
     )
   )
 )
-
-
-
 # ################## Server functions ##############################
 
 server <- function(input, output, session) {
@@ -422,30 +417,37 @@ server <- function(input, output, session) {
     updateSelectInput(session, "assignBlanks", choices = valid_ids)
   })
   
-  # Observer for "Export" button
-  observeEvent(input$exportBlanks, {
-    # Check if blank_matrix is not NULL
-    if (!is.null(blank_matrix())) {
-      # Call raw2tidy function with appropriate arguments
-      tidy_data <- raw2tidy(od_matrix(), flu_matrix(), as.data.frame(design_matrix$data), blank_matrix())
-      
+  # Create a reactive value to track download status
+  download_triggered <- reactiveVal(FALSE)
+  
+  # Reactive expression to generate tidy data
+  tidy_data <- reactive({
+    req(blank_matrix())  # Ensure blank_matrix is not NULL
+    raw2tidy(od_matrix(), flu_matrix(), as.data.frame(design_matrix$data), blank_matrix())
+  })
+  
+  # Download handler for the tidy data
+  output$downloadData <- downloadHandler(
+    filename = function() {
       # Get the current value from the "File Name" text input
       file_name <- input$fileName
+      # Return the file name with .csv extension
+      paste0(file_name, ".csv")
+    },
+    content = function(file) {
+      # Write the tidy dataframe to the specified file
+      write.csv(tidy_data(), file, row.names = FALSE)
       
-      # Check if the "tidy" folder exists
-      if (!dir.exists("tidy")) {
-        # If the "tidy" folder does not exist, create it
-        dir.create("tidy")
-      }
-      
-      # Save the tidy dataframe to the "tidy" folder
-      write.csv(tidy_data, file = file.path("tidy", paste0(file_name, ".csv")), row.names = FALSE)
-      
-      # Restart values to original
+      # Set the download_triggered to TRUE
+      download_triggered(TRUE)
+    }
+  )
+  
+  # Observe the download trigger and reload the session
+  observeEvent(download_triggered(), {
+    if (download_triggered()) {
       shinyjs::click("restart")
-      
-      # Restart the Shiny app
-      session$reload()
+      session$reload()  # Reload the session
     }
   })
   
