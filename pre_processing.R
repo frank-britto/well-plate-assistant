@@ -1,3 +1,4 @@
+
 block_shape_processing <- function(name) {
   
   
@@ -113,105 +114,94 @@ smooth_filter <- function(df, window_size = 5) {
 
 raw2tidy <- function(od_matrix, flu_matrix, design_matrix, blank_matrix) {
   
-  # Step N°1: Pre-allocation
-  
-  # Extract the number of experimental conditions besides the blank
+  # Step N°1: Extract unique experimental conditions excluding "blank"
   design_conditions <- design_matrix$Condition
   unique_conditions <- unique(design_conditions[!is.na(design_conditions) & design_conditions != "blank"])
   
-  # Calculate the total number of rows
-  num_rows <- length(od_matrix$time) * length(unique_conditions) * max(table(design_matrix$Condition))
+  # Initialize an empty data frame to store all results
+  tidy_format <- data.frame()
   
-  # Pre-allocate a new dataframe
-  tidy_format <- data.frame(
-    time = rep(od_matrix$time, length.out = num_rows),
-    od = rep(NA, num_rows),
-    flu = rep(NA, num_rows),
-    growth_rate = rep(NA, num_rows),
-    production_rate = rep(NA, num_rows),
-    phi = rep(NA, num_rows),
-    Condition = rep(rep(unique_conditions, each = length(od_matrix$time)), times = max(table(design_matrix$Condition))),
-    replicate = rep(NA, num_rows)
-  )
-  
-  # Step N°2: Blank subtraction and assigning replicate numbers
-  
-  # Create a dataframe to store od and flu values separately
-  od_values <- tibble(!!!setNames(replicate(length(unique_conditions), rep(NA, length(od_matrix$time)), simplify = FALSE), unique_conditions))
-  flu_values <- tibble(!!!setNames(replicate(length(unique_conditions), rep(NA, length(flu_matrix$time)), simplify = FALSE), unique_conditions))
-  
-  # Iterate through the "Condition" column of blank_matrix
-  for (blank_condition in unique(blank_matrix$Condition)) {
+  # Step N°2: Blank subtraction and data collection
+  for (condition in unique_conditions) {
     
-    # Save the corresponding well coordinate
-    assigned_blank <- blank_matrix$Wells[blank_matrix$Condition == blank_condition]
+    # Get wells corresponding to the current condition
+    wells <- design_matrix$Well[design_matrix$Condition == condition]
     
-    # Look to which wells the blank corresponds for further subtraction
-    matching_rows <- design_matrix$Well[!is.na(design_matrix$Condition) & design_matrix$Condition == blank_condition]
-    corresponding_wells <- unique(matching_rows)
+    # Get the corresponding blank for the current condition
+    blank_well <- blank_matrix$Wells[blank_matrix$Condition == condition]
     
-    # Check for > 1 replicates
-    if (length(corresponding_wells) > 1) {
-      
-      # Broadcasting and subtracting blank values for multiple replicates
-      broadcasted_assigned_blank <- od_matrix[, assigned_blank, drop = FALSE]
-      broadcasted_assigned_blank <- cbind(broadcasted_assigned_blank, od_matrix[, assigned_blank, drop = FALSE][, rep(1, length(corresponding_wells)-1)])
-      subtracted_columns <- od_matrix[, corresponding_wells, drop = FALSE] - broadcasted_assigned_blank
-      average_subtracted_columns <- rowMeans(subtracted_columns, na.rm = TRUE)
-      
-      # Assign the subtracted values
-      od_values[[blank_condition]] <- average_subtracted_columns
-      
-      # Repeat for fluorescent data
-      broadcasted_assigned_blank <- flu_matrix[, assigned_blank, drop = FALSE]
-      broadcasted_assigned_blank <- cbind(broadcasted_assigned_blank, flu_matrix[, assigned_blank, drop = FALSE][, rep(1, length(corresponding_wells)-1)])
-      subtracted_columns <- flu_matrix[, corresponding_wells, drop = FALSE] - broadcasted_assigned_blank
-      average_subtracted_columns <- rowMeans(subtracted_columns, na.rm = TRUE)
-      flu_values[[blank_condition]] <- average_subtracted_columns
-      
-    } else {
-      # Broadcasting and appending without averaging
-      broadcasted_assigned_blank <- od_matrix[, assigned_blank, drop = FALSE]
-      subtracted_columns <- od_matrix[, corresponding_wells, drop = FALSE] - broadcasted_assigned_blank
-      od_values[[blank_condition]] <- as.numeric(subtracted_columns)
-      
-      # Repeat for fluorescent data
-      broadcasted_assigned_blank <- flu_matrix[, assigned_blank, drop = FALSE]
-      subtracted_columns <- flu_matrix[, corresponding_wells, drop = FALSE] - broadcasted_assigned_blank
-      flu_values[[blank_condition]] <- as.numeric(subtracted_columns)
+    # Check if there are any wells for the current condition
+    if (length(wells) == 0 || length(blank_well) == 0) {
+      next  # Skip if no wells or blank found for this condition
     }
+    
+    # Debugging: Print the current condition and wells
+    cat("Processing condition:", condition, "with wells:", wells, "\n")
+    
+    # Initialize a data frame to store results for the current condition
+    condition_results <- data.frame(
+      time = rep(od_matrix$time, length(wells)),
+      od = NA,
+      flu = NA,
+      Condition = condition,
+      replicate = NA  # Placeholder for replicates
+    )
+    
+    # Subtract blank values for all replicates
+    for (i in seq_along(wells)) {
+      well <- wells[i]
+      
+      # Ensure that the well exists in the OD and fluorescence matrices
+      if (!is.null(od_matrix[[well]]) && !is.null(flu_matrix[[well]])) {
+        # Subtract OD values
+        od_adjusted <- od_matrix[[well]] - od_matrix[[blank_well]]
+        # Subtract fluorescence values
+        flu_adjusted <- flu_matrix[[well]] - flu_matrix[[blank_well]]
+        
+        # Assign adjusted values to the condition results data frame
+        start_index <- (i - 1) * length(od_matrix$time) + 1
+        condition_results$od[start_index:(start_index + length(od_matrix$time) - 1)] <- od_adjusted
+        condition_results$flu[start_index:(start_index + length(od_matrix$time) - 1)] <- flu_adjusted
+      }
+    }
+    
+    # Append the current condition's results to the tidy_format data frame
+    tidy_format <- rbind(tidy_format, condition_results)
   }
   
-  # Arrange od_values and flu_values matrices according to the order of experiments
-  unique_values_sorted <- tidy_format %>% distinct(Condition)
-  od_values <- od_values[, match(unique_values_sorted$Condition, names(od_values))]
-  flu_values <- flu_values[, match(unique_values_sorted$Condition, names(flu_values))]
-  
-  # Assign values to the new dataframe
-  tidy_format$od <- od_values %>% gather() %>% select(value) %>% pull()
-  tidy_format$flu <- flu_values %>% gather() %>% select(value) %>% pull()
-  
-  # Assign replicate numbers for each condition
-  tidy_format <- tidy_format %>%
-    group_by(Condition) %>%
-    mutate(replicate = rep(1:max(table(design_matrix$Condition)), each = length(od_matrix$time))) %>%
-    ungroup()
-  
   # Step N°3: Calculate model parameters
-  
   tidy_format <- tidy_format %>%
     group_by(Condition) %>%
     mutate(
       phi = flu / od,
-      # Calculate growth_rate manually for the first time point, then use diff for the rest
-      growth_rate = c((od[2] - od[1]) / (time[2] - time[1]), diff(od) / diff(time)),
-      # Similarly, calculate production_rate manually for the first time point
-      production_rate = c((flu[2] - flu[1]) / (time[2] - time[1]), diff(flu) / diff(time))
+      growth_rate = c(NA, diff(od) / diff(time)),
+      production_rate = c(NA, diff(flu) / diff(time))
     ) %>%
     ungroup()
   
-  # Apply smooth_filter to add 'gr' and 'pr' columns
-  tidy_format <- smooth_filter(tidy_format)
+  # Remove rows with NA values in OD or Fluorescence before modeling
+  tidy_format <- tidy_format %>%
+    filter(!is.na(od) & !is.na(flu))
+  
+  # Step N°4: Assign replicate numbers based on time
+  for (inducer in unique(tidy_format$Condition)) {
+    inducer_data <- tidy_format[tidy_format$Condition == inducer, ]
+    
+    # Get unique time points
+    unique_times <- unique(inducer_data$time)
+    
+    for (time in unique_times) {
+      # Find indices for the current time
+      time_indices <- which(inducer_data$time == time)
+      
+      # Check if there are any indices to assign
+      if (length(time_indices) > 0) {
+        # Assign replicate numbers based on occurrences
+        replicate_number <- seq_along(time_indices)
+        tidy_format$replicate[tidy_format$Condition == inducer & tidy_format$time == time] <- replicate_number
+      }
+    }
+  }
   
   # Change the column name from "Condition" to "inducer"
   colnames(tidy_format)[colnames(tidy_format) == "Condition"] <- "inducer"
